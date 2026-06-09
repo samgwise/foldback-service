@@ -39,7 +39,9 @@ class Settings:
     # STT settings
     stt_model: str = os.getenv("FOLDBACK_STT_MODEL", "large-v3")
     stt_device: str = os.getenv("FOLDBACK_STT_DEVICE", "cuda" if os.name != "nt" else "cpu")
-    stt_compute_type: str = os.getenv("FOLDBACK_STT_COMPUTE_TYPE", "float16")
+    # Auto-detect compute type: float16 requires CUDA, so default to int8 on CPU
+    _stt_compute_type_default = "float16" if os.getenv("FOLDBACK_STT_DEVICE", "cuda" if os.name != "nt" else "cpu") == "cuda" else "int8"
+    stt_compute_type: str = os.getenv("FOLDBACK_STT_COMPUTE_TYPE", _stt_compute_type_default)
 
     # Task manager settings
     batch_size_llm: int = int(os.getenv("FOLDBACK_BATCH_SIZE_LLM", "1"))

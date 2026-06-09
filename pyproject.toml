@@ -21,6 +21,9 @@ dependencies = [
     "whisperx>=3.4.5",
 ]
 
+[project.scripts]
+foldback-service = "src.main:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -39,6 +42,7 @@ torchaudio = [{ index = "pytorch-cu124" }]
 
 [dependency-groups]
 dev = [
+    "pyinstaller>=6.20.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
     "ruff>=0.9.0",

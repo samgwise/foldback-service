@@ -235,3 +235,18 @@ async def get_resources():
 async def health_check():
     """Basic health-check endpoint."""
     return {"status": "ok", "provider": settings.llm_provider}
+
+
+def main():
+    """Entry point for running the service as a standalone executable."""
+    print(f"Starting Foldback Service on {settings.host}:{settings.port}")
+    print(f"LLM Provider: {settings.llm_provider}")
+    print(f"STT Model: {settings.stt_model}")
+    print("Press Ctrl+C to stop.")
+    import uvicorn
+    uvicorn.run(
+        app,
+        host=settings.host,
+        port=settings.port,
+        log_level=settings.log_level.lower(),
+    )
