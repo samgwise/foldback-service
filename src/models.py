@@ -91,9 +91,9 @@ class FeedbackRequest(BaseModel):
 
 class CriterionAssessment(BaseModel):
     criterion_id: str = Field(description="Matches the rubric criterion id.")
-    points: float = Field(description="Points awarded for this criterion.")
+    points: float = Field(description="Points awarded for this criterion. Use a continuous scale from 0 to max_points; interpolate between rubric level anchors rather than snapping to a single level's point value.")
     max_points: float = Field(description="Maximum points available for this criterion.")
-    level_selected: str | None = Field(default=None, description="The rubric level name that was selected.")
+    level_selected: str | None = Field(default=None, description="The name of the rubric level closest to the awarded score (reference only — does not constrain the points value).")
     feedback: str = Field(description="Student-facing feedback for this criterion.")
 
     @field_validator("criterion_id")

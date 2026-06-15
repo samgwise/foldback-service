@@ -99,6 +99,16 @@ CRITICAL RESTRICTIONS:
 2. Zero Meta-Commentary: Never say "The notes state", "The professor adjusted", or "This criteria shows".
 3. Strict Domain Isolation: Only evaluate items explicitly mentioned in the rubric categories. Do not create pseudo-criteria rows like "Total Score".
 
+GRADIENT SCORING PROTOCOL:
+Treat rubric levels as anchor points on a continuous scale — NOT as discrete buckets.
+- Compare the student's work quality against the level descriptors.
+- Interpolate the score between the two closest level anchors.
+  Example: if the work falls between "Credit" (8/12) and "Distinction" (10/12) with slightly more credit-like qualities, you might award 8.5/12 or 9/12.
+- The "points" field should reflect this interpolated value, not just snap to a level's exact point value.
+- You may award any value from 0 up to max_points, not limited to the predefined level points.
+- If the notes mention partial credit or a range, interpolate accordingly.
+- Use "level_selected" to indicate which named level is the closest reference point, but do not restrict your point value to that level's points.
+
 ZERO-DATA SCORING PROTOCOL:
 If the raw grading notes do not mention a specific rubric category or fail to provide a clear deduction value, you must:
 - Award the FULL maximum points possible for that category by default.
