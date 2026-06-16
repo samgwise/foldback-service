@@ -1,6 +1,6 @@
 # Foldback Service: AI-Assisted Feedback Generation
 
-A FastAPI microservice that receives rough marker notes and rubric context, then returns structured, student-facing feedback using a multi-pass LLM pipeline. Designed to sit alongside the [student-management-app](https://github.com/.../student-management-app) (Tauri 2 + Leptos) as a separate process.
+A FastAPI microservice that receives rough marker notes, rubric context, and optional historical marking precedents, then returns structured, student-facing feedback using a multi-pass LLM pipeline. Designed to sit alongside the [student-management-app](https://github.com/.../student-management-app) (Tauri 2 + Leptos) as a separate process.
 
 Reuses the proven multi-pass architecture from the [foldback](https://github.com/.../foldback) prototype.
 
@@ -12,7 +12,7 @@ foldback-service/
 ├── .env.example           # Environment variable template
 ├── src/
 │   ├── __init__.py
-│   ├── main.py            # FastAPI app with /generate-feedback, /suggest-mapping, /health
+│   ├── main.py            # FastAPI app with /generate-feedback, /embeddings, /suggest-mapping, /health
 │   ├── models.py          # Pydantic request/response schemas + blacklist validation
 │   ├── config.py          # Environment-based configuration
 │   ├── providers.py       # LLM provider abstraction (Ollama, OpenAI-compatible)
@@ -30,8 +30,20 @@ Rather than throwing raw text at an LLM and hoping for valid JSON, the service s
 
 1. **Pass 1 — Unpack/Sanitisation** (temperature: 0.3, free-form text): Cleans messy grading notes, removes rhetorical questions, expands fragments into complete sentences. Output is a polished narrative.
 2. **Pass 2 — Audit** (temperature: 0.0, strict JSON): Checks the sanitized text against the rubric and assignment brief. Generates `ReviewFlag` objects for vague, missing, or contradictory content.
-3. **Pass 3 — Compile** (temperature: 0.0, strict Pydantic JSON): Maps sanitized text to individual rubric criteria. Applies the **Zero-Data Scoring Protocol** — if a criterion is unmentioned, full points are awarded by default with supportive feedback.
+3. **Pass 3 — Compile** (temperature: 0.0, strict Pydantic JSON): Maps sanitized text to individual rubric criteria. If historical precedents are supplied, they are treated as gold-standard examples for resolving rubric ambiguity and maintaining consistent grade mapping. If no precedents are supplied, the service uses cold start rubric-only grading. Applies the **Zero-Data Scoring Protocol** — if a criterion is unmentioned, full points are awarded by default with supportive feedback.
 4. **Pass 4 — Summary Generation** (temperature: 0.3): Creates a polished, student-facing summary paragraph from all criterion assessments.
+
+## Marking Precedents and RAG
+
+The service supports precedent-aware feedback generation as part of the student-management app's RAG pipeline:
+
+1. The app builds a precedent query from marker notes and voice transcript text.
+2. The app calls `POST /embeddings` to generate an embedding for that query.
+3. The app performs hybrid SQLite search over historical `grading_records` using FTS5 keyword matching plus vector similarity.
+4. The retrieved precedents are sent to `POST /generate-feedback` in the `precedents` field.
+5. Pass 3 injects those precedents into the compile prompt as historical assessment precedents.
+
+Precedents are advisory historical examples but are presented to the LLM as immutable case law for consistent rubric interpretation. When the list is empty, the prompt explicitly enters cold start mode and grades strictly against the rubric.
 
 ## LLM Provider Abstraction
 
@@ -43,6 +55,8 @@ The service supports two back-ends via a common `LLMProvider` interface:
 | `OpenAICompatibleProvider` | `httpx` | Calls any OpenAI-compatible REST API (including Ollama's `/v1` endpoint). Configurable via environment variables. |
 
 Both providers reuse the same pipeline implementation — only the `chat()` call differs.
+
+Both providers also implement `embed_text()` for `POST /embeddings`. Ollama uses its embeddings endpoint, while the OpenAI-compatible provider uses an embeddings API compatible with OpenAI-style clients.
 
 ## Safety & Validation
 
@@ -87,6 +101,7 @@ Key environment variables:
 | `FOLDBACK_OPENAI_BASE_URL` | `http://localhost:11434/v1` | OpenAI-compatible API base URL |
 | `FOLDBACK_OPENAI_API_KEY` | _(empty)_ | API key for OpenAI-compatible provider |
 | `FOLDBACK_OPENAI_MODEL` | _(empty)_ | Model name for OpenAI-compatible provider |
+| `FOLDBACK_EMBEDDING_MODEL` | `nomic-embed-text` | Default embedding model for `POST /embeddings` |
 | `FOLDBACK_NUM_CTX` | `16384` | Ollama context window size |
 | `FOLDBACK_NUM_PREDICT` | `1024` | Ollama max tokens to generate |
 | `FOLDBACK_PORT` | `8100` | Service port |
@@ -143,11 +158,24 @@ Generates structured feedback from marker notes and rubric context.
   },
   "assignment_brief": "Create a 4-minute radiophonic production...",
   "few_shot_examples": null,
+  "precedents": [
+    {
+      "massaged_notes": "The work showed strong creative development but had inconsistent audio mixing.",
+      "criterion_assessments": [
+        {
+          "criterion_id": "c1",
+          "points": 8.0,
+          "level_selected": "Distinction",
+          "feedback": "You demonstrated strong creative development."
+        }
+      ]
+    }
+  ],
   "model": null
 }
 ```
 
-**Response:**
+**Response (precedents omitted for brevity; when present, they inform rubric interpretation):**
 
 ```json
 {
@@ -169,6 +197,28 @@ Generates structured feedback from marker notes and rubric context.
   ],
   "summary_feedback": "Overall, your creative approach was strong and you demonstrated good original thinking. Focus on improving the technical aspects of your audio production for next time.",
   "total_points": 8.0
+}
+```
+
+### POST /embeddings
+
+Generates an embedding vector for text. The student-management app uses this endpoint to embed marker notes before hybrid precedent search.
+
+**Request body:**
+
+```json
+{
+  "text": "Strong creative concept but inconsistent audio mix.",
+  "model": null
+}
+```
+
+**Response:**
+
+```json
+{
+  "embedding": [0.0123, -0.0456, 0.0789],
+  "dimension": 3
 }
 ```
 
