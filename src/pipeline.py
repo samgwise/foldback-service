@@ -92,7 +92,36 @@ Notes: {sanitized_notes}"""
 # ---------------------------------------------------------------------------
 # Pass 3 — Compile (criterion assessments)
 # ---------------------------------------------------------------------------
-_COMPILE_SYSTEM = """You are an expert academic tutor speaking directly to a student. Your job is to translate raw grading notes into clear, encouraging, second-person ("You") feedback criteria blocks.
+_COMPILE_SYSTEM_WITH_PRECEDENTS = """You are a deterministic assessment mapping agent. Your sole purpose is to map raw, massaged assignment notes into a structured JSON rubric schema.
+
+CRITICAL OPERATIONAL CONSTRAINT:
+The baseline rubric text provided below is intentionally broad. You MUST interpret its ambiguities strictly through the lens of the historical grading precedents provided in the "HISTORICAL ASSESSMENT PRECEDENTS" section. If a characteristic in the new assignment closely matches a characteristic in a historical example, you must apply the exact same evaluation standard and grade mapping.
+
+CRITICAL RESTRICTIONS:
+1. Speak directly to the student: Use "You", "Your project", "Your presentation".
+2. Zero Meta-Commentary: Never say "The notes state", "The professor adjusted", or "This criteria shows".
+3. Strict Domain Isolation: Only evaluate items explicitly mentioned in the rubric categories. Do not create pseudo-criteria rows like "Total Score".
+
+GRADIENT SCORING PROTOCOL:
+Treat rubric levels as anchor points on a continuous scale — NOT as discrete buckets.
+- Compare the student's work quality against the level descriptors.
+- Interpolate the score between the two closest level anchors.
+  Example: if the work falls between "Credit" (8/12) and "Distinction" (10/12) with slightly more credit-like qualities, you might award 8.5/12 or 9/12.
+- The "points" field should reflect this interpolated value, not just snap to a level's exact point value.
+- You may award any value from 0 up to max_points, not limited to the predefined level points.
+- If the notes mention partial credit or a range, interpolate accordingly.
+- Use "level_selected" to indicate which named level is the closest reference point, but do not restrict your point value to that level's points.
+
+ZERO-DATA SCORING PROTOCOL:
+If the raw grading notes do not mention a specific rubric category or fail to provide a clear deduction value, you must:
+- Award the FULL maximum points possible for that category by default.
+- Write a supportive, general acknowledgement in the feedback (e.g., "Your implementation meets standard expectations for this milestone.").
+- Do not try to guess a penalty if the notes are silent on that section."""
+
+_COMPILE_SYSTEM_COLD_START = """You are an expert academic tutor speaking directly to a student. Your job is to translate raw grading notes into clear, encouraging, second-person ("You") feedback criteria blocks.
+
+CRITICAL OPERATIONAL CONSTRAINT:
+No historical precedents are available. Grade strictly against the rubric criteria provided below. Do not invent criteria or scores beyond what the rubric defines.
 
 CRITICAL RESTRICTIONS:
 1. Speak directly to the student: Use "You", "Your project", "Your presentation".
@@ -122,9 +151,31 @@ async def _pass_compile(
     few_shot_examples: str | None,
     chat: ChatFn,
     model: str,
+    precedents: list[dict[str, Any]] | None = None,
 ) -> CompileOutput:
-    examples_text = few_shot_examples or "No historical examples provided. Rely entirely on the rubric guidelines below."
-    payload = f"""[HISTORICAL BENCHMARKS]
+    if precedents:
+        # Build precedent block
+        precedent_lines = []
+        for i, p in enumerate(precedents, 1):
+            precedent_lines.append(f"### PRECEDENT {i}")
+            precedent_lines.append(f"[PAST MASSAGED NOTES]:\n{p.get('massaged_notes', '')}")
+            precedent_lines.append(f"[HISTORICAL JSON CRITERION OUTPUT]:\n{json.dumps(p.get('criterion_assessments', []), indent=2)}")
+            precedent_lines.append("")
+        precedents_block = "\n".join(precedent_lines)
+        system_prompt = _COMPILE_SYSTEM_WITH_PRECEDENTS
+        examples_text = few_shot_examples or ""
+        payload = f"""[HISTORICAL ASSESSMENT PRECEDENTS (GOLD STANDARD EXAMPLES)]:
+{precedents_block}
+
+[TARGET RUBRIC CRITERIA EXPECTED]
+{rubric_json}
+
+[RAW GRADING FRAGMENTS TO TRANSLATE]
+{sanitized_notes}"""
+    else:
+        system_prompt = _COMPILE_SYSTEM_COLD_START
+        examples_text = few_shot_examples or "No historical examples provided. Rely entirely on the rubric guidelines below."
+        payload = f"""[HISTORICAL BENCHMARKS]
 {examples_text}
 
 [TARGET RUBRIC CRITERIA EXPECTED]
@@ -136,7 +187,7 @@ async def _pass_compile(
     schema = CompileOutput.model_json_schema()
     response = await chat(
         messages=[
-            {"role": "system", "content": _COMPILE_SYSTEM},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": payload},
         ],
         schema=schema,
@@ -198,15 +249,17 @@ async def run_feedback_pipeline(
     )
     logger.debug("Pass 2 complete: %d flags detected", len(audit_result.review_flags))
 
-    # Pass 3: Compile
+    # Pass 3: Compile (precedent-aware)
+    precedents = [p.model_dump() for p in request.precedents] if request.precedents else None
     compile_result = await _pass_compile(
         unpack_result.sanitized_notes,
         rubric_json,
         request.few_shot_examples,
         chat,
         model,
+        precedents=precedents,
     )
-    logger.debug("Pass 3 complete: %d criteria compiled", len(compile_result.criteria))
+    logger.debug("Pass 3 complete: %d criteria compiled (precedents=%s)", len(compile_result.criteria), "yes" if precedents else "no")
 
     # Pass 4: Summary
     summary_result = await _pass_summary(

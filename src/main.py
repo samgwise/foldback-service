@@ -13,7 +13,14 @@ from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from src.config import settings
-from src.models import FeedbackRequest, FeedbackResponse, MappingRequest, MappingResponse
+from src.models import (
+    EmbeddingRequest,
+    EmbeddingResponse,
+    FeedbackRequest,
+    FeedbackResponse,
+    MappingRequest,
+    MappingResponse,
+)
 from src.providers import get_provider
 from src.task_manager import TaskManager, TaskType
 
@@ -229,6 +236,20 @@ async def get_resources():
     """Get current resource usage and queue state."""
     tm = _get_task_manager()
     return await tm.get_resources_async()
+
+
+@app.post("/embeddings", response_model=EmbeddingResponse)
+async def get_embeddings(request_body: EmbeddingRequest):
+    """Generate an embedding vector for the given text."""
+    try:
+        provider = get_provider()
+        embedding = await provider.embed_text(request_body.text, request_body.model)
+        return EmbeddingResponse(embedding=embedding, dimension=len(embedding))
+    except ValueError:
+        raise
+    except Exception as exc:
+        logger.exception("Embedding generation failed")
+        raise HTTPException(status_code=500, detail=f"Embedding generation failed: {exc}") from exc
 
 
 @app.get("/health")

@@ -43,6 +43,10 @@ class LLMProvider(ABC):
     async def suggest_mapping(self, request: MappingRequest) -> MappingResponse:
         """Analyse CSV headers and propose a mapping to the target schema."""
 
+    @abstractmethod
+    async def embed_text(self, text: str, model: str | None = None) -> list[float]:
+        """Generate an embedding vector for the given text."""
+
 
 # ---------------------------------------------------------------------------
 # Ollama provider
@@ -92,6 +96,12 @@ class OllamaProvider(LLMProvider):
     async def suggest_mapping(self, request: MappingRequest) -> MappingResponse:
         from src.pipeline import run_mapping_suggestion
         return await run_mapping_suggestion(request, self.chat)
+
+    # -- embeddings ----------------------------------------------------------
+    async def embed_text(self, text: str, model: str | None = None) -> list[float]:
+        emb_model = model or settings.embedding_model
+        response = ollama.embeddings(model=emb_model, prompt=text)
+        return response["embedding"]
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +164,20 @@ class OpenAICompatibleProvider(LLMProvider):
     async def suggest_mapping(self, request: MappingRequest) -> MappingResponse:
         from src.pipeline import run_mapping_suggestion
         return await run_mapping_suggestion(request, self.chat)
+
+    async def embed_text(self, text: str, model: str | None = None) -> list[float]:
+        emb_model = model or self._model
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        payload = {"input": text, "model": emb_model}
+        async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
+            resp = await client.post(
+                f"{self._base_url}/embeddings", json=payload, headers=headers
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        return data["data"][0]["embedding"]
 
 
 # ---------------------------------------------------------------------------

@@ -26,6 +26,9 @@ class Settings:
     num_ctx: int = int(os.getenv("FOLDBACK_NUM_CTX", "16384"))
     num_predict: int = int(os.getenv("FOLDBACK_NUM_PREDICT", "1024"))
 
+    # Embedding model (used by /embeddings endpoint)
+    embedding_model: str = os.getenv("FOLDBACK_EMBEDDING_MODEL", "nomic-embed-text")
+
     # Server settings
     port: int = int(os.getenv("FOLDBACK_PORT", "8100"))
     host: str = os.getenv("FOLDBACK_HOST", "0.0.0.0")
@@ -42,6 +45,9 @@ class Settings:
     # Auto-detect compute type: float16 requires CUDA, so default to int8 on CPU
     _stt_compute_type_default = "float16" if os.getenv("FOLDBACK_STT_DEVICE", "cuda" if os.name != "nt" else "cpu") == "cuda" else "int8"
     stt_compute_type: str = os.getenv("FOLDBACK_STT_COMPUTE_TYPE", _stt_compute_type_default)
+
+    # Embedding model settings
+    embedding_model: str = os.getenv("FOLDBACK_EMBEDDING_MODEL", "nomic-embed-text")
 
     # Task manager settings
     batch_size_llm: int = int(os.getenv("FOLDBACK_BATCH_SIZE_LLM", "1"))

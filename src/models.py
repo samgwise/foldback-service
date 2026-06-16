@@ -86,7 +86,29 @@ class FeedbackRequest(BaseModel):
     rubric: Rubric = Field(description="Rubric structure with criteria and levels.")
     assignment_brief: str | None = Field(default=None, description="Optional assignment brief / instructions.")
     few_shot_examples: str | None = Field(default=None, description="Optional historical marking examples.")
+    precedents: list["PrecedentExample"] = Field(default_factory=list, description="Historical grading precedents for case-law-aware compilation.")
     model: str | None = Field(default=None, description="Optional model name override for this request.")
+
+
+class PrecedentExample(BaseModel):
+    """A historical grading precedent used as case-law reference during compilation."""
+    massaged_notes: str = Field(description="Sanitised/combined notes from the historical grading case.")
+    criterion_assessments: list[dict] = Field(
+        default_factory=list,
+        description="Historical CriterionAssessment outputs (JSON dicts with criterion_id, points, feedback, etc.).",
+    )
+
+
+class EmbeddingRequest(BaseModel):
+    """Request to generate a text embedding vector."""
+    text: str = Field(description="Input text to embed.")
+    model: str | None = Field(default=None, description="Optional embedding model name override.")
+
+
+class EmbeddingResponse(BaseModel):
+    """Response containing an embedding vector."""
+    embedding: list[float] = Field(description="The embedding vector as a list of floats.")
+    dimension: int = Field(description="Dimensionality of the embedding vector.")
 
 
 class CriterionAssessment(BaseModel):
