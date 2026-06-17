@@ -100,6 +100,11 @@ class OllamaProvider(LLMProvider):
     # -- embeddings ----------------------------------------------------------
     async def embed_text(self, text: str, model: str | None = None) -> list[float]:
         emb_model = model or settings.embedding_model
+        # Defensively truncate text to avoid exceeding model context limits
+        max_chars = 8000
+        if len(text) > max_chars:
+            logger.info("Truncating embedding text from %d to %d characters to fit model context limit", len(text), max_chars)
+            text = text[:max_chars]
         response = ollama.embeddings(model=emb_model, prompt=text)
         return response["embedding"]
 
@@ -167,6 +172,11 @@ class OpenAICompatibleProvider(LLMProvider):
 
     async def embed_text(self, text: str, model: str | None = None) -> list[float]:
         emb_model = model or self._model
+        # Defensively truncate text to avoid exceeding model context limits
+        max_chars = 8000
+        if len(text) > max_chars:
+            logger.info("Truncating embedding text from %d to %d characters to fit model context limit", len(text), max_chars)
+            text = text[:max_chars]
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
