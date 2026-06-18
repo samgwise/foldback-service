@@ -6,10 +6,12 @@ from pydantic import ValidationError
 from src.models import (
     CRITERIA_BLACKLIST,
     CriterionAssessment,
+    FeedbackRequest,
     FeedbackResponse,
     MappingRequest,
     MappingResponse,
     MappingSuggestion,
+    PrecedentExample,
     ReviewFlag,
     Rubric,
     RubricCriterion,
@@ -183,3 +185,62 @@ class TestMappingModels:
             ],
         )
         assert response.confidence == 0.9
+
+
+# ---------------------------------------------------------------------------
+# PrecedentExample camelCase compatibility tests
+# ---------------------------------------------------------------------------
+# The Rust client serialises PrecedentExample with camelCase field names due
+# to #[serde(rename_all = "camelCase")]. The Python model must accept these
+# aliases to maintain the contract between services.
+
+class TestPrecedentExampleCamelCase:
+    """Ensure PrecedentExample accepts camelCase fields from the Rust client."""
+
+    def test_deserialise_with_camelcase_fields(self):
+        """CamelCase fields from Rust should be accepted via aliases."""
+        data = {
+            "massagedNotes": "The student demonstrated strong analysis.",
+            "criterionAssessments": [
+                {"criterionId": "c1", "points": 8.0, "maxPoints": 10.0, "levelSelected": "Distinction", "feedback": "Good."}
+            ],
+        }
+        example = PrecedentExample(**data)
+        assert example.massaged_notes == "The student demonstrated strong analysis."
+        assert len(example.criterion_assessments) == 1
+        assert example.criterion_assessments[0]["criterionId"] == "c1"
+
+    def test_deserialise_with_snakecase_fields(self):
+        """Snake_case fields (direct Python usage) should also work."""
+        data = {
+            "massaged_notes": "The student demonstrated strong analysis.",
+            "criterion_assessments": [
+                {"criterion_id": "c1", "points": 8.0}
+            ],
+        }
+        example = PrecedentExample(**data)
+        assert example.massaged_notes == "The student demonstrated strong analysis."
+        assert len(example.criterion_assessments) == 1
+
+    def test_feedback_request_with_camelcase_precedents(self):
+        """A full FeedbackRequest with camelCase precedents should parse correctly."""
+        data = {
+            "marker_notes": "Good effort, needs more detail.",
+            "student_name": "Jane Smith",
+            "student_id": "S12345",
+            "rubric": {
+                "criteria": [{"id": "c1", "name": "Analysis", "max_points": 10.0, "levels": [], "description": None}],
+                "total_points": 10.0,
+            },
+            "precedents": [
+                {
+                    "massagedNotes": "The student demonstrated strong analysis.",
+                    "criterionAssessments": [
+                        {"criterionId": "c1", "points": 8.0, "maxPoints": 10.0, "levelSelected": "Distinction", "feedback": "Good."}
+                    ],
+                }
+            ],
+        }
+        request = FeedbackRequest(**data)
+        assert len(request.precedents) == 1
+        assert request.precedents[0].massaged_notes == "The student demonstrated strong analysis."

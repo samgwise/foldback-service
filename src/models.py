@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -153,6 +153,10 @@ class FeedbackResponse(BaseModel):
     )
     summary_feedback: str = Field(description="Polished overall summary for the student.")
     total_points: float = Field(description="Sum of awarded points across all criteria.")
+    grounding_warnings: list[dict[str, str]] = Field(
+        default_factory=list,
+        description="Warnings for criteria where feedback could not be fully grounded in marker notes.",
+    )
 
     @field_validator("criteria")
     @classmethod
@@ -209,6 +213,39 @@ class AuditOutput(BaseModel):
 class CompileOutput(BaseModel):
     """Pass 3 — structured criterion assessments."""
     criteria: list[CriterionAssessment] = Field(description="Criterion-level scores and feedback.")
+
+
+class UngroundedItem(BaseModel):
+    """Pass 3.5 — grounding verification finding."""
+    criterion_id: str = Field(description="Matches the rubric criterion id.")
+    original_feedback: str = Field(description="The original feedback text that contains ungrounded claims.")
+    ungrounded_phrases: list[str] = Field(description="Exact phrases from the feedback not present in marker notes.")
+    reason: str = Field(description="Explanation of why the feedback is ungrounded.")
+
+
+class GroundingOutput(BaseModel):
+    """Pass 3.5 — grounding verification result."""
+    ungrounded_items: list[UngroundedItem] = Field(
+        default_factory=list,
+        description="Criteria with feedback not grounded in marker notes.",
+    )
+
+
+class RefinedCriterion(BaseModel):
+    """A single criterion assessment refined for grounding."""
+    criterion_id: str = Field(description="Matches the rubric criterion id.")
+    points: float = Field(description="Points awarded for this criterion.")
+    max_points: float = Field(description="Maximum points available for this criterion.")
+    level_selected: str | None = Field(default=None, description="The rubric level closest to the awarded score.")
+    feedback: str = Field(description="Student-facing feedback, grounded in marker notes.")
+
+
+class RefinementOutput(BaseModel):
+    """Pass 3.6 — refined criterion assessments after grounding correction."""
+    refined_criteria: list[RefinedCriterion] = Field(
+        default_factory=list,
+        description="Refined criterion assessments with ungrounded content removed.",
+    )
 
 
 class SummaryOutput(BaseModel):

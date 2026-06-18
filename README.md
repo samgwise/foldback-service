@@ -293,6 +293,10 @@ The Tauri app communicates with this service via HTTP. Typical flow:
 4. Tauri app populates `criterion_grades` rows with the returned `criteria` and stores `review_flags` for coordinator review
 5. Student-facing `public_comments` are generated from the `summary_feedback` field
 
+### Field naming convention
+
+The Rust client serialises `PrecedentExample` with camelCase field names (`massagedNotes`, `criterionAssessments`) via `#[serde(rename_all = "camelCase")]`. The Python Pydantic model accepts both camelCase (via `alias`) and snake_case to maintain compatibility. When modifying either the Rust `PrecedentExample` struct or the Python `PrecedentExample` model, ensure both sides stay in sync — the test `TestPrecedentExampleCamelCase` in `tests/test_models.py` guards against breaking this contract.
+
 ## Design Decisions
 
 - **Separate microservice**: Keeps the LLM pipeline decoupled from the Tauri/Rust/Leptos stack, allowing independent development and deployment.
