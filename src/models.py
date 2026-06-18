@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # ---------------------------------------------------------------------------
 # Blacklist constants
@@ -92,10 +92,15 @@ class FeedbackRequest(BaseModel):
 
 class PrecedentExample(BaseModel):
     """A historical grading precedent used as case-law reference during compilation."""
-    massaged_notes: str = Field(description="Sanitised/combined notes from the historical grading case.")
+    model_config = ConfigDict(populate_by_name=True)
+    massaged_notes: str = Field(
+        description="Sanitised/combined notes from the historical grading case.",
+        alias="massagedNotes",
+    )
     criterion_assessments: list[dict] = Field(
         default_factory=list,
         description="Historical CriterionAssessment outputs (JSON dicts with criterion_id, points, feedback, etc.).",
+        alias="criterionAssessments",
     )
 
 
