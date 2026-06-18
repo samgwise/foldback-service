@@ -89,6 +89,9 @@ class TestProviderInterface:
                 from src.pipeline import run_mapping_suggestion
                 return await run_mapping_suggestion(request, self.chat)
 
+            async def embed_text(self, text: str, model: str | None = None) -> list[float]:
+                return [0.1, 0.2, 0.3]
+
         provider = TestProvider()
         rubric = Rubric(
             criteria=[
@@ -135,6 +138,9 @@ class TestProviderInterface:
             async def suggest_mapping(self, request: MappingRequest):
                 from src.pipeline import run_mapping_suggestion
                 return await run_mapping_suggestion(request, self.chat)
+
+            async def embed_text(self, text: str, model: str | None = None) -> list[float]:
+                return [0.1, 0.2, 0.3]
 
         provider = TestProvider()
         request = MappingRequest(csv_headers=["ID", "Name"], target_schema="students")

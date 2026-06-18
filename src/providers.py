@@ -19,6 +19,59 @@ from src.models import (
 
 logger = logging.getLogger(__name__)
 
+# Cache of discovered character limits per embedding model.
+# Populated on first embed call via binary-search probing.
+_EMBEDDING_LIMITS: dict[str, int] = {}
+_DEFAULT_EMBEDDING_LIMIT = 8000  # Fallback if probing fails
+
+
+async def _discover_embedding_limit(
+    model: str,
+    probe_fn,
+) -> int:
+    """Binary-search probe to discover the max character count for an embedding model.
+
+    The `probe_fn(text)` is an async callable that returns an embedding vector on
+    success, or raises an exception when the text is too long. This function finds
+    the largest character count that succeeds and caches it in `_EMBEDDING_LIMITS`.
+
+    Search range: 256 chars (safe lower bound) to 65536 chars (generous upper bound).
+    Uses 12 iterations of binary search — enough precision at low overhead.
+    """
+    if model in _EMBEDDING_LIMITS:
+        return _EMBEDDING_LIMITS[model]
+
+    lo, hi = 256, 65536
+    best = _DEFAULT_EMBEDDING_LIMIT
+
+    # Seed that's representative of typical English text
+    seed = "a "
+
+    logger.info("Probing embedding limit for model '%s' (range %d–%d chars)", model, lo, hi)
+
+    for _ in range(12):
+        if lo >= hi:
+            break
+        mid = (lo + hi) // 2
+        test_text = seed * mid
+        try:
+            await probe_fn(test_text)
+            best = mid
+            lo = mid + 1
+        except Exception as e:
+            error_msg = str(e).lower()
+            if any(kw in error_msg for kw in ["context", "too long", "exceed", "maximum", "limit", "input length"]):
+                hi = mid - 1
+            else:
+                logger.warning("Embedding probe failed for non-length reason: %s", e)
+                best = _DEFAULT_EMBEDDING_LIMIT
+                break
+
+    _EMBEDDING_LIMITS[model] = best
+    logger.info("Discovered embedding limit for '%s': %d characters", model, best)
+    return best
+
+
 # ---------------------------------------------------------------------------
 # Abstract provider interface
 # ---------------------------------------------------------------------------
@@ -57,6 +110,8 @@ class OllamaProvider(LLMProvider):
 
     def __init__(self) -> None:
         self._model = settings.ollama_model
+        self._embedding_model = settings.embedding_model
+        self._embedding_limit: int | None = None
 
     # -- chat ----------------------------------------------------------------
     async def chat(
@@ -97,11 +152,26 @@ class OllamaProvider(LLMProvider):
         from src.pipeline import run_mapping_suggestion
         return await run_mapping_suggestion(request, self.chat)
 
+    async def _ensure_embedding_limit(self) -> None:
+        """Discover and cache the embedding model's character limit on first use."""
+        if self._embedding_limit is not None:
+            return
+        emb_model = self._embedding_model
+
+        async def probe(text: str) -> list[float]:
+            response = ollama.embeddings(model=emb_model, prompt=text)
+            return response["embedding"]
+
+        self._embedding_limit = await _discover_embedding_limit(emb_model, probe)
+
     # -- embeddings ----------------------------------------------------------
     async def embed_text(self, text: str, model: str | None = None) -> list[float]:
-        emb_model = model or settings.embedding_model
-        # Defensively truncate text to avoid exceeding model context limits
-        max_chars = 8000
+        emb_model = model or self._embedding_model
+
+        # Auto-discover limit on first embed call
+        await self._ensure_embedding_limit()
+        max_chars = self._embedding_limit or _DEFAULT_EMBEDDING_LIMIT
+
         if len(text) > max_chars:
             logger.info("Truncating embedding text from %d to %d characters to fit model context limit", len(text), max_chars)
             text = text[:max_chars]
@@ -120,6 +190,8 @@ class OpenAICompatibleProvider(LLMProvider):
         self._base_url = settings.openai_base_url.rstrip("/")
         self._api_key = settings.openai_api_key
         self._model = settings.openai_model or settings.ollama_model
+        self._embedding_model = settings.openai_model or settings.ollama_model
+        self._embedding_limit: int | None = None
 
     async def _post(
         self,
@@ -170,17 +242,12 @@ class OpenAICompatibleProvider(LLMProvider):
         from src.pipeline import run_mapping_suggestion
         return await run_mapping_suggestion(request, self.chat)
 
-    async def embed_text(self, text: str, model: str | None = None) -> list[float]:
-        emb_model = model or self._model
-        # Defensively truncate text to avoid exceeding model context limits
-        max_chars = 8000
-        if len(text) > max_chars:
-            logger.info("Truncating embedding text from %d to %d characters to fit model context limit", len(text), max_chars)
-            text = text[:max_chars]
+    async def _do_embedding(self, text: str, model: str) -> list[float]:
+        """Low-level embedding call used by both probing and normal embeds."""
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
-        payload = {"input": text, "model": emb_model}
+        payload = {"input": text, "model": model}
         async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
             resp = await client.post(
                 f"{self._base_url}/embeddings", json=payload, headers=headers
@@ -188,6 +255,28 @@ class OpenAICompatibleProvider(LLMProvider):
             resp.raise_for_status()
             data = resp.json()
         return data["data"][0]["embedding"]
+
+    async def _ensure_embedding_limit(self) -> None:
+        """Discover and cache the embedding model's character limit on first use."""
+        if self._embedding_limit is not None:
+            return
+        emb_model = self._embedding_model
+        self._embedding_limit = await _discover_embedding_limit(
+            emb_model,
+            lambda t: self._do_embedding(t, emb_model),
+        )
+
+    async def embed_text(self, text: str, model: str | None = None) -> list[float]:
+        emb_model = model or self._embedding_model
+
+        # Auto-discover limit on first embed call
+        await self._ensure_embedding_limit()
+        max_chars = self._embedding_limit or _DEFAULT_EMBEDDING_LIMIT
+
+        if len(text) > max_chars:
+            logger.info("Truncating embedding text from %d to %d characters to fit model context limit", len(text), max_chars)
+            text = text[:max_chars]
+        return await self._do_embedding(text, emb_model)
 
 
 # ---------------------------------------------------------------------------
