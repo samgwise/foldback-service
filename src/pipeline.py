@@ -348,13 +348,8 @@ async def _pass_grounding_check(
 [MARKER NOTES]
 {sanitized_notes}
 
-Return a JSON list of ungrounded items. Each item must have:
-- criterion_id: the criterion identifier
-- original_feedback: the original feedback text
-- ungrounded_phrases: list of exact phrases not present in marker notes
-- reason: explanation of why the feedback is ungrounded
-
-If all feedback is grounded, return an empty list."""
+Return a JSON object with key "ungrounded_items" containing a list.
+If all feedback is grounded, return {{"ungrounded_items": []}}."""
 
     try:
         schema = GroundingOutput.model_json_schema()
@@ -366,11 +361,21 @@ If all feedback is grounded, return an empty list."""
             schema=schema,
             options={"temperature": 0.0, "model": model},
         )
-        data = json.loads(response)
-        items = data.get("ungrounded_items", [])
+
+        # Try normal parse first
+        try:
+            data = json.loads(response)
+        except json.JSONDecodeError:
+            # Try to recover from truncated output
+            logger.warning("Grounding check response truncated, attempting recovery")
+            data = _extract_json_array(response)
+            if data is None:
+                raise
+
+        items = data.get("ungrounded_items", []) if isinstance(data, dict) else []
         ungrounded = [UngroundedItem(**item) for item in items]
         return GroundingOutput(ungrounded_items=ungrounded)
-    except (json.JSONDecodeError, Exception) as e:
+    except Exception as e:
         logger.warning("Grounding check failed, assuming clean: %s", e)
         return GroundingOutput(ungrounded_items=[])
 

@@ -23,53 +23,52 @@ logger = logging.getLogger(__name__)
 # Populated on first embed call via binary-search probing.
 _EMBEDDING_LIMITS: dict[str, int] = {}
 _DEFAULT_EMBEDDING_LIMIT = 8000  # Fallback if probing fails
+_MIN_EMBEDDING_LIMIT = 4096     # Never go below this — representative English text fits easily
 
 
-async def _discover_embedding_limit(
-    model: str,
-    probe_fn,
-) -> int:
-    """Binary-search probe to discover the max character count for an embedding model.
+def _discover_embedding_limit(model: str) -> int:
+    """Discover embedding limit by querying the model's architecture info via Ollama.
 
-    The `probe_fn(text)` is an async callable that returns an embedding vector on
-    success, or raises an exception when the text is too long. This function finds
-    the largest character count that succeeds and caches it in `_EMBEDDING_LIMITS`.
-
-    Search range: 256 chars (safe lower bound) to 65536 chars (generous upper bound).
-    Uses 12 iterations of binary search — enough precision at low overhead.
+    Calls `ollama.show` to retrieve the hardcoded context_length from the
+    model's GGUF metadata, then converts tokens to a conservative character estimate.
     """
     if model in _EMBEDDING_LIMITS:
         return _EMBEDDING_LIMITS[model]
 
-    lo, hi = 256, 65536
-    best = _DEFAULT_EMBEDDING_LIMIT
-
-    # Seed that's representative of typical English text
-    seed = "a "
-
-    logger.info("Probing embedding limit for model '%s' (range %d–%d chars)", model, lo, hi)
-
-    for _ in range(12):
-        if lo >= hi:
-            break
-        mid = (lo + hi) // 2
-        test_text = seed * mid
-        try:
-            await probe_fn(test_text)
-            best = mid
-            lo = mid + 1
-        except Exception as e:
-            error_msg = str(e).lower()
-            if any(kw in error_msg for kw in ["context", "too long", "exceed", "maximum", "limit", "input length"]):
-                hi = mid - 1
-            else:
-                logger.warning("Embedding probe failed for non-length reason: %s", e)
-                best = _DEFAULT_EMBEDDING_LIMIT
+    # Known limits for common models (characters) used as fallback.
+    KNOWN_LIMITS = {
+        "nomic-embed-text": 24000,
+        "nomic-embed-text:latest": 24000,
+        "mxbai-embed-large": 1500,
+        "all-minilm": 750,
+    }
+    
+    try:
+        # Try to get context length from Ollama model info
+        response = ollama.show(model=model)
+        model_info = response.get("model_info", {})
+        
+        context_tokens = 0
+        for key, val in model_info.items():
+            if key.endswith("context_length"):
+                context_tokens = val
                 break
+        
+        if context_tokens > 0:
+            # Conservative estimate: 2.5 chars per token for English text
+            char_limit = int(context_tokens * 2.5)
+            logger.info("Retrieved embedding limit for '%s': %d tokens -> %d chars", model, context_tokens, char_limit)
+            _EMBEDDING_LIMITS[model] = char_limit
+            return char_limit
+            
+    except Exception as e:
+        logger.warning("Could not fetch model info from Ollama for '%s': %s — using default", model, e)
 
-    _EMBEDDING_LIMITS[model] = best
-    logger.info("Discovered embedding limit for '%s': %d characters", model, best)
-    return best
+    # Fallback
+    limit = KNOWN_LIMITS.get(model, _DEFAULT_EMBEDDING_LIMIT)
+    logger.info("Using fallback embedding limit for '%s': %d characters", model, limit)
+    _EMBEDDING_LIMITS[model] = limit
+    return limit
 
 
 # ---------------------------------------------------------------------------
@@ -152,24 +151,18 @@ class OllamaProvider(LLMProvider):
         from src.pipeline import run_mapping_suggestion
         return await run_mapping_suggestion(request, self.chat)
 
-    async def _ensure_embedding_limit(self) -> None:
+    def _ensure_embedding_limit(self) -> None:
         """Discover and cache the embedding model's character limit on first use."""
         if self._embedding_limit is not None:
             return
-        emb_model = self._embedding_model
-
-        async def probe(text: str) -> list[float]:
-            response = ollama.embeddings(model=emb_model, prompt=text)
-            return response["embedding"]
-
-        self._embedding_limit = await _discover_embedding_limit(emb_model, probe)
+        self._embedding_limit = _discover_embedding_limit(self._embedding_model)
 
     # -- embeddings ----------------------------------------------------------
     async def embed_text(self, text: str, model: str | None = None) -> list[float]:
         emb_model = model or self._embedding_model
 
         # Auto-discover limit on first embed call
-        await self._ensure_embedding_limit()
+        self._ensure_embedding_limit()
         max_chars = self._embedding_limit or _DEFAULT_EMBEDDING_LIMIT
 
         if len(text) > max_chars:
@@ -256,21 +249,17 @@ class OpenAICompatibleProvider(LLMProvider):
             data = resp.json()
         return data["data"][0]["embedding"]
 
-    async def _ensure_embedding_limit(self) -> None:
+    def _ensure_embedding_limit(self) -> None:
         """Discover and cache the embedding model's character limit on first use."""
         if self._embedding_limit is not None:
             return
-        emb_model = self._embedding_model
-        self._embedding_limit = await _discover_embedding_limit(
-            emb_model,
-            lambda t: self._do_embedding(t, emb_model),
-        )
+        self._embedding_limit = _discover_embedding_limit(self._embedding_model)
 
     async def embed_text(self, text: str, model: str | None = None) -> list[float]:
         emb_model = model or self._embedding_model
 
         # Auto-discover limit on first embed call
-        await self._ensure_embedding_limit()
+        self._ensure_embedding_limit()
         max_chars = self._embedding_limit or _DEFAULT_EMBEDDING_LIMIT
 
         if len(text) > max_chars:
