@@ -15,7 +15,13 @@ from src.models import (
     RubricCriterion,
     RubricLevel,
 )
-from src.providers import LLMProvider, get_provider
+from src.providers import (
+    LLMProvider,
+    OllamaProvider,
+    _EMBEDDING_LIMITS,
+    _discover_embedding_limit,
+    get_provider,
+)
 
 
 class TestProviderFactory:
@@ -148,3 +154,51 @@ class TestProviderInterface:
 
         assert response.confidence == 0.9
         assert response.column_mapping == {"student_id": "ID"}
+
+
+class TestEmbeddingLimits:
+    """Verify embedding input is truncated to fit the model context window."""
+
+    @pytest.fixture(autouse=True)
+    def clear_embedding_cache(self):
+        """Clear the module-level embedding limit cache before each test."""
+        _EMBEDDING_LIMITS.clear()
+        yield
+        _EMBEDDING_LIMITS.clear()
+
+    def test_discover_embedding_limit_uses_known_nomic_limit(self):
+        with patch("src.providers.ollama.show") as mock_show:
+            mock_show.side_effect = Exception("offline")
+            limit = _discover_embedding_limit("nomic-embed-text")
+        # nomic-embed-text has a 2048-token context window; at 2.5 chars/token that's 5120
+        assert limit == 5120
+
+    def test_discover_embedding_limit_uses_ollama_context_length(self):
+        with patch("src.providers.ollama.show") as mock_show:
+            mock_show.return_value = {"model_info": {"some.context_length": 1024}}
+            limit = _discover_embedding_limit("custom-embed")
+        assert limit == 2560  # 1024 * 2.5
+
+    def test_discover_embedding_limit_clamps_to_minimum(self):
+        with patch("src.providers.ollama.show") as mock_show:
+            # Tiny reported context would otherwise produce a useless limit
+            mock_show.return_value = {"model_info": {"some.context_length": 100}}
+            limit = _discover_embedding_limit("custom-embed")
+        assert limit >= 2000
+
+    @pytest.mark.asyncio
+    async def test_ollama_embed_text_truncates_long_input(self):
+        with patch("src.providers.settings") as mock_settings:
+            mock_settings.llm_provider = "ollama"
+            mock_settings.embedding_model = "nomic-embed-text"
+            mock_settings.ollama_model = "qwen2.5:14b"
+            provider = get_provider()
+            assert isinstance(provider, OllamaProvider)
+
+        with patch("src.providers.ollama.embeddings") as mock_embeddings:
+            mock_embeddings.return_value = {"embedding": [0.1, 0.2, 0.3]}
+            await provider.embed_text("word " * 10_000)
+
+        # The provider should have truncated the text before calling Ollama
+        called_text = mock_embeddings.call_args.kwargs["prompt"]
+        assert len(called_text) <= 5120

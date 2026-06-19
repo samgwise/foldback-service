@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 # Cache of discovered character limits per embedding model.
 # Populated on first embed call via binary-search probing.
 _EMBEDDING_LIMITS: dict[str, int] = {}
-_DEFAULT_EMBEDDING_LIMIT = 8000  # Fallback if probing fails
-_MIN_EMBEDDING_LIMIT = 4096     # Never go below this — representative English text fits easily
+_DEFAULT_EMBEDDING_LIMIT = 4000  # Fallback if probing fails — conservative for common 2048-token models
+_MIN_EMBEDDING_LIMIT = 2000     # Never go below this — representative English text fits easily
 
 
 def _discover_embedding_limit(model: str) -> int:
@@ -36,11 +36,14 @@ def _discover_embedding_limit(model: str) -> int:
         return _EMBEDDING_LIMITS[model]
 
     # Known limits for common models (characters) used as fallback.
+    # Values are derived from each model's advertised token context length
+    # multiplied by a conservative 2.5 characters per token estimate.
     KNOWN_LIMITS = {
-        "nomic-embed-text": 24000,
-        "nomic-embed-text:latest": 24000,
-        "mxbai-embed-large": 1500,
-        "all-minilm": 750,
+        "nomic-embed-text": 5120,       # 2048 tokens
+        "nomic-embed-text:latest": 5120,  # 2048 tokens
+        "mxbai-embed-large": 1280,       # 512 tokens
+        "all-minilm": 640,               # 256 tokens
+        "all-minilm:latest": 640,        # 256 tokens
     }
     
     try:
@@ -55,8 +58,10 @@ def _discover_embedding_limit(model: str) -> int:
                 break
         
         if context_tokens > 0:
-            # Conservative estimate: 2.5 chars per token for English text
-            char_limit = int(context_tokens * 2.5)
+            # Conservative estimate: 2.5 chars per token for English text.
+            # Clamp to a safe minimum so an unexpectedly large reported value
+            # does not allow text that the underlying engine rejects.
+            char_limit = max(_MIN_EMBEDDING_LIMIT, int(context_tokens * 2.5))
             logger.info("Retrieved embedding limit for '%s': %d tokens -> %d chars", model, context_tokens, char_limit)
             _EMBEDDING_LIMITS[model] = char_limit
             return char_limit
